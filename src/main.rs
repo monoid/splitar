@@ -20,8 +20,7 @@
  * IN THE SOFTWARE.
  */
 use clap::Parser;
-use std::{fs::File, io, path::PathBuf, process::exit};
-
+use std::{fs::File, io, path::{Path, PathBuf}, process::exit};
 use tar::Archive;
 
 // Simple wrapper for binary one-letter units (like 300G).
@@ -67,17 +66,10 @@ impl SplitState {
     fn next_file<R: io::Read>(&mut self, mut entry: tar::Entry<R>) -> io::Result<()> {
         let acc_size = self.acc_size;
         let max_size = self.args.max_size;
-        log::debug!("builder.is_some(): {}", self.builder.is_some());
         let mut builder = match &mut self.builder {
             Some(builder) => builder,
             None => self.start_new_volume()?,
         };
-        log::info!(
-            "acc_size: {}, next size: {}, max_size: {}",
-            acc_size,
-            acc_size + entry.size(),
-            max_size,
-        );
         if acc_size > 0 && acc_size + entry.size() > max_size {
             builder = self.start_new_volume()?;
         }
@@ -115,7 +107,7 @@ impl SplitState {
     }
 }
 
-fn body() -> Result<(), Box<dyn std::error::Error>> {
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = Args::parse();
 
@@ -124,7 +116,7 @@ fn body() -> Result<(), Box<dyn std::error::Error>> {
     let stdin = io::stdin();
     let stdin = stdin.lock();
 
-    let file: Box<dyn io::Read> = if args.input_file.as_path().to_str() == Some("-") {
+    let file: Box<dyn io::Read> = if args.input_file == Path::new("-") {
         Box::new(stdin)
     } else {
         std::mem::drop(stdin);
@@ -141,18 +133,28 @@ fn body() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn main() {
+fn format_error<E: std::fmt::Display>(e: E) {
     use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor as _};
-    if let Err(e) = body() {
-        let mut stderr = StandardStream::stderr(ColorChoice::Auto);
-        stderr
-            .set_color(ColorSpec::new().set_fg(Some(Color::Red)).set_bold(true))
-            .unwrap();
-        eprint!("error:");
-        stderr
-            .set_color(ColorSpec::new().set_fg(None).set_bold(false))
-            .unwrap();
-        eprintln!(" {}", e);
+
+    let choice = if atty::is(atty::Stream::Stdout) {
+        ColorChoice::Auto
+    } else {
+        ColorChoice::Never
+    };
+    let mut stderr = StandardStream::stderr(choice);
+
+    let mut bold_red = ColorSpec::new();
+    bold_red.set_fg(Some(Color::Red)).set_bold(true);
+
+    stderr.set_color(&bold_red).unwrap();
+    eprint!("error:");
+    stderr.set_color(&ColorSpec::new()).unwrap();
+    eprintln!(" {}", e);
+}
+
+fn main() {
+    if let Err(e) = run() {
+        format_error(e);
         exit(1);
     }
 }
