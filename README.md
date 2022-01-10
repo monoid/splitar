@@ -1,7 +1,7 @@
-# Content-aware splitting of tar archive
+# Content-aware splitting of tar archives
 
 `splitar` splits large tar archive, writing each volume as an independent
-tar archive, never splitting archive in the middle of a file.
+tar archive, never splitting it in the middle of a file.
 
 `splitar` works in a streaming fashion, never loading into the memory
 more than necessary.
@@ -13,7 +13,7 @@ more than necessary.
 
 ## TODO
 + Optionally fail when file too large is found.
-+ Recreate directory entries for each volume, making it truely independent.
++ Recreate directory entries for each volume, making it truly independent.
 
 ## Limitations
 + While chunks are limited by size, it is the size of contained data, not
