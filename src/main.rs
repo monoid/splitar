@@ -22,7 +22,6 @@
 use clap::Parser;
 use std::{
     ffi::OsString,
-    fs::File,
     io,
     path::{Path, PathBuf},
     process::{exit, Child, Command, Stdio},
@@ -58,8 +57,8 @@ struct SplitState {
     acc_size: u64,
     vol_idx: u32,
     args: Args,
-    // TODO: tar output + compress
-    builder: Option<tar::Builder<Box<dyn io::Write>>>,
+    // TODO: use a struct with named fields
+    builder: Option<(tar::Builder<Box<dyn io::Write>>, PathBuf, PathBuf)>,
     subprocess: Option<Child>,
 }
 
@@ -78,11 +77,11 @@ impl SplitState {
         let acc_size = self.acc_size;
         let max_size = self.args.max_size;
         let mut builder = match &mut self.builder {
-            Some(builder) => builder,
-            None => self.start_new_volume()?,
+            Some((builder, _, _)) => builder,
+            None => self.start_new_volume()?.0,
         };
         if acc_size > 0 && acc_size + entry.size() > max_size {
-            builder = self.start_new_volume()?;
+            builder = self.start_new_volume()?.0;
         }
 
         let header = entry.header().clone();
@@ -92,18 +91,29 @@ impl SplitState {
         Ok(())
     }
 
-    fn start_new_volume(&mut self) -> io::Result<&mut tar::Builder<Box<dyn io::Write>>> {
+    fn start_new_volume(
+        &mut self,
+    ) -> io::Result<(&mut tar::Builder<Box<dyn io::Write>>, &PathBuf, &PathBuf)> {
         self.finish()?;
-        let out_path = format!(
+        let out_path = PathBuf::from_str(&format!(
             "{path}{index:0>width$}",
             path = self.args.output_prefix,
             width = self.args.suffix_length as _,
             index = self.vol_idx,
-        );
-        log::info!("Starting new volume: {}", out_path);
-        // TODO one should write to the file a command output if available, and then
-        // output tar to the command input.
-        let out_file = File::create(out_path)?;
+        ))
+        .expect("invalid output path");
+        log::info!("Starting new volume: {:?}", out_path);
+        log::debug!("Creating temp file for output");
+        let out_temp_file = tempfile::Builder::new()
+            // Unwrap is ok as we construct the path with numbers, see above
+            .prefix(out_path.file_name().unwrap())
+            .rand_bytes(self.args.suffix_length as _)
+            .suffix(".tmp")
+            .tempfile_in(out_path.parent().unwrap_or_else(|| Path::new(".")))?;
+        let (out_file, out_temp_path) = out_temp_file.into_parts();
+        let out_temp_path = out_temp_path.keep().map_err(|e| e.error)?;
+        log::debug!("Output temp file {:?}", out_temp_path);
+
         let out_file = match &self.args.compress {
             Some(compress) => {
                 let shell = std::env::var_os("SHELL").unwrap_or_else(|| {
@@ -132,17 +142,20 @@ impl SplitState {
         let builder = tar::Builder::new(out_file);
         self.vol_idx += 1;
         self.acc_size = 0;
-        Ok(self.builder.insert(builder))
+        let builder_data = self.builder.insert((builder, out_temp_path, out_path));
+        Ok((&mut builder_data.0, &builder_data.1, &builder_data.2))
     }
 
     fn finish(&mut self) -> io::Result<()> {
-        if let Some(mut old_builder) = self.builder.take() {
+        if let Some((mut old_builder, temp_path, result_path)) = self.builder.take() {
             old_builder.finish()?;
             // It is important that we call the Builder::finish first
             if let Some(mut subprocess) = self.subprocess.take() {
                 log::info!("Waiting subprocess {} to finish", subprocess.id());
                 subprocess.wait()?;
             }
+            log::debug!("Moving {:?} to {:?}", temp_path, result_path);
+            std::fs::rename(temp_path, result_path)?;
         }
         Ok(())
     }
