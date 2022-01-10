@@ -58,7 +58,11 @@ struct SplitState {
     vol_idx: u32,
     args: Args,
     // TODO: use a struct with named fields
-    builder: Option<(tar::Builder<Box<dyn io::Write>>, PathBuf, PathBuf)>,
+    builder: Option<(
+        tar::Builder<Box<dyn io::Write>>,
+        tempfile::TempPath,
+        PathBuf,
+    )>,
     subprocess: Option<Child>,
 }
 
@@ -93,7 +97,11 @@ impl SplitState {
 
     fn start_new_volume(
         &mut self,
-    ) -> io::Result<(&mut tar::Builder<Box<dyn io::Write>>, &PathBuf, &PathBuf)> {
+    ) -> io::Result<(
+        &mut tar::Builder<Box<dyn io::Write>>,
+        &tempfile::TempPath,
+        &PathBuf,
+    )> {
         self.finish()?;
         let out_path = PathBuf::from_str(&format!(
             "{path}{index:0>width$}",
@@ -111,7 +119,6 @@ impl SplitState {
             .suffix(".tmp")
             .tempfile_in(out_path.parent().unwrap_or_else(|| Path::new(".")))?;
         let (out_file, out_temp_path) = out_temp_file.into_parts();
-        let out_temp_path = out_temp_path.keep().map_err(|e| e.error)?;
         log::debug!("Output temp file {:?}", out_temp_path);
 
         let out_file = match &self.args.compress {
@@ -155,7 +162,7 @@ impl SplitState {
                 subprocess.wait()?;
             }
             log::debug!("Moving {:?} to {:?}", temp_path, result_path);
-            std::fs::rename(temp_path, result_path)?;
+            temp_path.persist(result_path)?;
         }
         Ok(())
     }
