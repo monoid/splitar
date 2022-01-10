@@ -9,11 +9,11 @@ more than necessary.
 ## Features
 + Split tar files, generating valid tar files of limited data size.
 + Reading data from stdin (writing to stdout is not possible, obviously).
++ Compress filter (or any other kind) for the output.
 
 ## TODO
 + Optionally fail when file too large is found.
 + Recreate directory entries for each volume, making it truely independent.
-+ Compress filter for the output.
 
 ## Limitations
 + While chunks are limited by size, it is the size of contained data, not

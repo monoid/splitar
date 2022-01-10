@@ -20,7 +20,14 @@
  * IN THE SOFTWARE.
  */
 use clap::Parser;
-use std::{fs::File, io, path::{Path, PathBuf}, process::exit};
+use std::{
+    ffi::OsString,
+    fs::File,
+    io,
+    path::{Path, PathBuf},
+    process::{exit, Child, Command, Stdio},
+    str::FromStr,
+};
 use tar::Archive;
 
 // Simple wrapper for binary one-letter units (like 300G).
@@ -38,6 +45,8 @@ struct Args {
         help = "max data size per output volume",
     )]
     max_size: u64,
+    #[clap(long)]
+    compress: Option<String>,
     #[clap(short = 'a', long, default_value = "5")]
     suffix_length: u8,
     #[clap(help = "input file path or `-` for stdin")]
@@ -51,6 +60,7 @@ struct SplitState {
     args: Args,
     // TODO: tar output + compress
     builder: Option<tar::Builder<Box<dyn io::Write>>>,
+    subprocess: Option<Child>,
 }
 
 impl SplitState {
@@ -60,6 +70,7 @@ impl SplitState {
             vol_idx: 0,
             args,
             builder: None,
+            subprocess: None,
         }
     }
 
@@ -89,10 +100,35 @@ impl SplitState {
             width = self.args.suffix_length as _,
             index = self.vol_idx,
         );
-        log::info!("starting new volume: {}", out_path);
+        log::info!("Starting new volume: {}", out_path);
         // TODO one should write to the file a command output if available, and then
         // output tar to the command input.
-        let out_file = io::BufWriter::new(File::create(out_path)?);
+        let out_file = File::create(out_path)?;
+        let out_file = match &self.args.compress {
+            Some(compress) => {
+                let shell = std::env::var_os("SHELL").unwrap_or_else(|| {
+                    OsString::from_str("/bin/bash").expect("internal: can't run on this os")
+                });
+                let subprocess = Command::new(shell)
+                    .arg("-c")
+                    .arg(compress)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::from(out_file))
+                    .spawn()?;
+                log::info!("Executing subprocess {}", subprocess.id());
+                Box::new(io::BufWriter::with_capacity(
+                    /* 16384 is default pipe buffer size for Linux;
+                     on MacOS, it can grow on demand up to this value.
+                     We are using half of this value.
+                    */
+                    1 << 13,
+                    subprocess
+                        .stdin
+                        .expect("internal: expecting subprocess stdin"),
+                )) as Box<dyn io::Write>
+            }
+            None => Box::new(io::BufWriter::new(out_file)),
+        };
         let builder = tar::Builder::new(Box::new(out_file) as Box<dyn io::Write>);
         self.vol_idx += 1;
         self.acc_size = 0;
@@ -102,6 +138,11 @@ impl SplitState {
     fn finish(&mut self) -> io::Result<()> {
         if let Some(mut old_builder) = self.builder.take() {
             old_builder.finish()?;
+            // It is important that we call the Builder::finish first
+            if let Some(mut subprocess) = self.subprocess.take() {
+                log::info!("Waiting subprocess {} to finish", subprocess.id());
+                subprocess.wait()?;
+            }
         }
         Ok(())
     }
