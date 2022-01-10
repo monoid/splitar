@@ -148,6 +148,17 @@ impl SplitState {
     }
 }
 
+impl Drop for SplitState {
+    fn drop(&mut self) {
+        if let Some(mut subprocess) = self.subprocess.take() {
+            log::warn!("Shouldn't happen: killing subprocess {}", subprocess.id());
+            subprocess
+                .kill()
+                .expect("failed to kill a child subprocess");
+        }
+    }
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = Args::parse();
