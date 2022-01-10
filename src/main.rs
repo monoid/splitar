@@ -162,7 +162,8 @@ impl SplitState {
                 subprocess.wait()?;
             }
             log::debug!("Moving {:?} to {:?}", temp_path, result_path);
-            temp_path.persist(result_path)?;
+            temp_path.persist(&result_path)?;
+            set_default_mode(&result_path)?;
         }
         Ok(())
     }
@@ -202,6 +203,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         state.next_file(ent)?;
     }
     state.finish()?;
+    Ok(())
+}
+
+/// tempfile crate creates files that only owner can read; we reset
+/// the file permissions to a default mode.
+#[cfg(unix)]
+fn set_default_mode(file: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // Is safe as we just set and reset umask.
+    let umask = unsafe {
+        let umask = libc::umask(0);
+        libc::umask(umask);
+        umask
+    };
+    let default_mode = 0o666 & !umask;
+    std::fs::set_permissions(file, std::fs::Permissions::from_mode(default_mode as _))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_default_mode(file: &Path) -> io::Result<()> {
+    // I have no better idea.
     Ok(())
 }
 
