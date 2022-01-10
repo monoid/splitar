@@ -129,7 +129,7 @@ impl SplitState {
             }
             None => Box::new(io::BufWriter::new(out_file)),
         };
-        let builder = tar::Builder::new(Box::new(out_file) as Box<dyn io::Write>);
+        let builder = tar::Builder::new(out_file);
         self.vol_idx += 1;
         self.acc_size = 0;
         Ok(self.builder.insert(builder))
