@@ -197,6 +197,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut archive = Archive::new(file);
     let mut state = SplitState::new(args);
+    // Enforce creating new volume for case when input file is empty:
+    // thus we output single empty file.
+    state.start_new_volume()?;
     for ent in archive.entries()?.raw(true) {
         let ent = ent?;
         log::debug!("entry: {:?}@{}", ent.path()?, ent.size());
