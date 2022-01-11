@@ -19,6 +19,7 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+
 use clap::Parser;
 use std::{
     ffi::OsString,
@@ -150,9 +151,7 @@ impl Volume {
             .take()
             .unwrap()
             .persist(&self.target_file)?;
-        set_default_mode(&self.target_file)?;
-
-        Ok(())
+        set_umasked_mode(&self.target_file, 0o666)
     }
 }
 
@@ -214,13 +213,12 @@ impl SplitState {
         self.volume.take().unwrap().finish()?;
         self.vol_idx += 1;
         self.volume = Some(Volume::new(self.vol_idx, &self.args)?);
+
         Ok(())
     }
 
     fn finish(mut self) -> io::Result<()> {
-        self.volume.take().unwrap().finish()?;
-        std::mem::forget(self);
-        Ok(())
+        self.volume.take().unwrap().finish()
     }
 }
 
@@ -255,18 +253,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// tempfile crate creates files that only owner can read; we reset
 /// the file permissions to a default mode.
 #[cfg(unix)]
-fn set_default_mode(file: &Path) -> io::Result<()> {
+fn set_umasked_mode(file: &Path, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
 
     // Is safe as we just set and reset umask.
+    // It can lead to race condition in the multithreading
+    // context, however.  Technically, this function should be
+    // declared unsafe too, but it is not a library code.
+    //
+    // N.B. On Linux, one can get own umask by reading the `/proc/self/status`
+    // file.
     let umask = unsafe {
         let umask = libc::umask(0);
         libc::umask(umask);
         umask
     };
-    let default_mode = 0o666 & !umask;
-    std::fs::set_permissions(file, std::fs::Permissions::from_mode(default_mode as _))?;
-    Ok(())
+    let result_mode = mode & (!umask as u32);
+    std::fs::set_permissions(file, std::fs::Permissions::from_mode(result_mode))
 }
 
 #[cfg(not(unix))]
@@ -275,7 +278,7 @@ fn set_default_mode(file: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn format_error<E: std::fmt::Display>(e: E) {
+fn eprintln_error<E: std::fmt::Display>(e: E) {
     use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor as _};
 
     let choice = if atty::is(atty::Stream::Stdout) {
@@ -296,7 +299,7 @@ fn format_error<E: std::fmt::Display>(e: E) {
 
 fn main() {
     if let Err(e) = run() {
-        format_error(e);
+        eprintln_error(e);
         exit(1);
     }
 }
