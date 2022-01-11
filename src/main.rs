@@ -53,130 +53,174 @@ struct Args {
     output_prefix: String,
 }
 
-struct SplitState {
+// This struct has some Option<T> field.  They are always
+// Some(_), except Drop::drop or similar methods.
+struct Volume {
     acc_size: u64,
-    vol_idx: u32,
-    args: Args,
-    // TODO: use a struct with named fields
-    builder: Option<(
-        tar::Builder<Box<dyn io::Write>>,
-        tempfile::TempPath,
-        PathBuf,
-    )>,
+    builder: Option<tar::Builder<io::BufWriter<Box<dyn io::Write>>>>,
+    temp_output: Option<tempfile::TempPath>,
+    target_file: PathBuf,
     subprocess: Option<Child>,
 }
 
-impl SplitState {
-    fn new(args: Args) -> Self {
-        Self {
-            acc_size: 0,
-            vol_idx: 0,
-            args,
-            builder: None,
-            subprocess: None,
-        }
-    }
-
-    fn next_file<R: io::Read>(&mut self, mut entry: tar::Entry<R>) -> io::Result<()> {
-        let acc_size = self.acc_size;
-        let max_size = self.args.max_size;
-        let mut builder = match &mut self.builder {
-            Some((builder, _, _)) => builder,
-            None => self.start_new_volume()?.0,
-        };
-        if acc_size > 0 && acc_size + entry.size() > max_size {
-            builder = self.start_new_volume()?.0;
-        }
-
-        let header = entry.header().clone();
-        builder.append(&header, &mut entry)?;
-
-        self.acc_size += entry.size();
-        Ok(())
-    }
-
-    fn start_new_volume(
-        &mut self,
-    ) -> io::Result<(
-        &mut tar::Builder<Box<dyn io::Write>>,
-        &tempfile::TempPath,
-        &PathBuf,
-    )> {
-        self.finish()?;
-        let out_path = PathBuf::from_str(&format!(
+impl Volume {
+    fn new(vol_idx: usize, args: &Args) -> io::Result<Self> {
+        let target_file = PathBuf::from_str(&format!(
             "{path}{index:0>width$}",
-            path = self.args.output_prefix,
-            width = self.args.suffix_length as _,
-            index = self.vol_idx,
+            path = args.output_prefix,
+            width = args.suffix_length as _,
+            index = vol_idx,
         ))
         .expect("invalid output path");
-        log::info!("Starting new volume: {:?}", out_path);
+        log::info!("Starting new volume: {:?}", target_file);
         log::debug!("Creating temp file for output");
         let out_temp_file = tempfile::Builder::new()
             // Unwrap is ok as we construct the path with numbers, see above
-            .prefix(out_path.file_name().unwrap())
-            .rand_bytes(self.args.suffix_length as _)
+            .prefix(target_file.file_name().unwrap())
+            .rand_bytes(args.suffix_length as _)
             .suffix(".tmp")
-            .tempfile_in(out_path.parent().unwrap_or_else(|| Path::new(".")))?;
-        let (out_file, out_temp_path) = out_temp_file.into_parts();
-        log::debug!("Output temp file {:?}", out_temp_path);
+            .tempfile_in(target_file.parent().unwrap_or_else(|| Path::new(".")))?;
+        let (out_file, temp_output) = out_temp_file.into_parts();
+        log::debug!("Output temp file {:?}", temp_output);
 
-        let out_file = match &self.args.compress {
+        let mut maybe_subprocess = None;
+
+        let out_file = match &args.compress {
             Some(compress) => {
                 let shell = std::env::var_os("SHELL").unwrap_or_else(|| {
                     OsString::from_str("/bin/bash").expect("internal: can't run on this os")
                 });
-                let subprocess = Command::new(shell)
+                let mut subprocess = Command::new(shell)
                     .arg("-c")
                     .arg(compress)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::from(out_file))
                     .spawn()?;
                 log::info!("Executing subprocess {}", subprocess.id());
-                Box::new(io::BufWriter::with_capacity(
-                    /* 16384 is default pipe buffer size for Linux;
-                     on MacOS, it can grow on demand up to this value.
-                     We are using half of this value.
-                    */
-                    1 << 13,
+
+                let out = Box::new(
                     subprocess
                         .stdin
+                        .take()
                         .expect("internal: expecting subprocess stdin"),
-                )) as Box<dyn io::Write>
+                ) as Box<dyn io::Write>;
+                // This supborcess has stdin field empty, but we do not use it anyway.
+                maybe_subprocess = Some(subprocess);
+
+                out
             }
-            None => Box::new(io::BufWriter::new(out_file)),
+            None => Box::new(out_file),
         };
-        let builder = tar::Builder::new(out_file);
-        self.vol_idx += 1;
-        self.acc_size = 0;
-        let builder_data = self.builder.insert((builder, out_temp_path, out_path));
-        Ok((&mut builder_data.0, &builder_data.1, &builder_data.2))
+
+        let builder = tar::Builder::new(io::BufWriter::with_capacity(
+            /* 16384 is default pipe buffer size for Linux;
+             * on MacOS, it can grow on demand up to this value.
+             * We are using half of this value.
+             */
+            1 << 13,
+            out_file,
+        ));
+
+        Ok(Self {
+            acc_size: 0,
+            builder: Some(builder),
+            temp_output: Some(temp_output),
+            target_file,
+            subprocess: maybe_subprocess,
+        })
     }
 
-    fn finish(&mut self) -> io::Result<()> {
-        if let Some((mut old_builder, temp_path, result_path)) = self.builder.take() {
-            old_builder.finish()?;
-            // It is important that we call the Builder::finish first
-            if let Some(mut subprocess) = self.subprocess.take() {
-                log::info!("Waiting subprocess {} to finish", subprocess.id());
-                subprocess.wait()?;
-            }
-            log::debug!("Moving {:?} to {:?}", temp_path, result_path);
-            temp_path.persist(&result_path)?;
-            set_default_mode(&result_path)?;
+    /// Complete writing the volume: finish the builder, wait the subprocess
+    /// to finish, and rename the temp file to the target file.
+    /// If this method is not called, the Drop implementation will rollback
+    /// everything.
+    fn finish(mut self) -> io::Result<()> {
+        // Finish the builder, and drop it, closing the
+        // underlying file.
+        self.builder.take().unwrap().finish()?;
+
+        // It is important that we call the Builder::finish first
+        if let Some(mut subprocess) = self.subprocess.take() {
+            log::info!("Waiting subprocess {} to finish", subprocess.id());
+            subprocess.wait()?;
         }
+
+        log::debug!("Moving {:?} to {:?}", self.temp_output, self.target_file);
+        self.temp_output
+            .take()
+            .unwrap()
+            .persist(&self.target_file)?;
+        set_default_mode(&self.target_file)?;
+
         Ok(())
     }
 }
 
-impl Drop for SplitState {
+impl Drop for Volume {
     fn drop(&mut self) {
+        // Close the builder file first, if any
+        self.builder.take();
+
+        // TODO It would be nice to have some kind of wrapper with .wait and Drop::drop.
         if let Some(mut subprocess) = self.subprocess.take() {
             log::warn!("Shouldn't happen: killing subprocess {}", subprocess.id());
-            subprocess
-                .kill()
-                .expect("failed to kill a child subprocess");
+            let _ = subprocess.kill();
         }
+    }
+}
+
+struct SplitState {
+    vol_idx: usize,
+    args: Args,
+    // We keep it optional, as we take and set back.
+    // I.e. it is optional only *within* certain functions.
+    volume: Option<Volume>,
+}
+
+impl SplitState {
+    fn new(args: Args) -> io::Result<Self> {
+        let vol_idx = 0;
+        let volume = Volume::new(vol_idx, &args)?;
+
+        Ok(Self {
+            vol_idx,
+            args,
+            volume: Some(volume),
+        })
+    }
+
+    fn next_file<R: io::Read>(&mut self, mut entry: tar::Entry<R>) -> io::Result<()> {
+        let volume = self.volume.as_mut().unwrap();
+        let acc_size = volume.acc_size;
+        let max_size = self.args.max_size;
+
+        if acc_size > 0 && acc_size + entry.size() > max_size {
+            self.start_new_volume()?;
+        }
+
+        let volume = self.volume.as_mut().unwrap();
+        let header = entry.header().clone();
+        volume
+            .builder
+            .as_mut()
+            .unwrap()
+            .append(&header, &mut entry)?;
+        volume.acc_size += entry.size();
+
+        Ok(())
+    }
+
+    fn start_new_volume(&mut self) -> io::Result<()> {
+        self.volume.take().unwrap().finish()?;
+        self.vol_idx += 1;
+        self.volume = Some(Volume::new(self.vol_idx, &self.args)?);
+        Ok(())
+    }
+
+    fn finish(mut self) -> io::Result<()> {
+        self.volume.take().unwrap().finish()?;
+        std::mem::forget(self);
+        Ok(())
     }
 }
 
@@ -196,16 +240,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(io::BufReader::new(std::fs::File::open(&args.input_file)?))
     };
     let mut archive = Archive::new(file);
-    let mut state = SplitState::new(args);
-    // Enforce creating new volume for case when input file is empty:
-    // thus we output single empty file.
-    state.start_new_volume()?;
+
+    let mut state = SplitState::new(args)?;
     for ent in archive.entries()?.raw(true) {
         let ent = ent?;
         log::debug!("entry: {:?}@{}", ent.path()?, ent.size());
         state.next_file(ent)?;
     }
     state.finish()?;
+
     Ok(())
 }
 
