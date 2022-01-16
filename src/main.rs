@@ -284,7 +284,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut archive = tar::Archive::new(file);
 
     let mut state = SplitState::new(args)?;
-    for ent in archive.entries()?.raw(true) {
+    for ent in archive.entries()?.raw(false) {
         let ent = ent?;
         log::debug!("entry: {:?}@{}", ent.path()?, ent.size());
         state.next_file(ent)?;
