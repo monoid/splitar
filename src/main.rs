@@ -177,7 +177,6 @@ impl Drop for Volume {
 struct SplitState {
     vol_idx: usize,
     args: Args,
-    // It is very likely that a trie would work better here.
     dirs: patricia_tree::PatriciaMap<tar::Header>,
     // We keep it optional, as we take and set back.
     // I.e. it is optional only *within* certain functions.
@@ -218,20 +217,33 @@ impl SplitState {
 
             let slash_pos = path.iter().enumerate().rev().find(|(_, &c)| c == b'/');
             if let Some((pos, _)) = slash_pos {
+                // std::path::Path is OS-dependent and cannot be used.  It would be
+                // nice to have something like Python's posixpath.
                 let dirname = &path[..=pos];
+                log::debug!("Checking dirname {:?}", String::from_utf8_lossy(dirname));
                 if dirname != volume.prev_dir {
                     volume.prev_dir = dirname.to_vec();
 
                     for header in self.dirs.common_prefix_values(dirname) {
+                        let path_bytes = header.path_bytes();
+                        let path_lossy = String::from_utf8_lossy(&path_bytes);
                         if !volume.stored_dirs.contains(header.path_bytes()) {
+                            log::debug!(
+                                "Dirname {:?} is new for the volume, inserting...",
+                                path_lossy
+                            );
                             volume
                                 .builder
                                 .as_mut()
                                 .unwrap()
                                 .append(header, vec![].as_slice())?;
                             volume.stored_dirs.insert(header.path_bytes());
+                        } else {
+                            log::debug!("Dirname {:?} already inserted, skipping...", path_lossy);
                         }
                     }
+                } else {
+                    log::debug!("Dirname is same, skip it.")
                 }
             }
         }
@@ -244,10 +256,9 @@ impl SplitState {
         volume.acc_size += entry.size();
 
         if self.args.recreate_dirs && header.entry_type().is_dir() {
-            self.dirs.insert(
-                header.path_bytes().into_owned().into_boxed_slice(),
-                entry.header().clone(),
-            );
+            self.dirs
+                .insert(header.path_bytes(), entry.header().clone());
+            volume.stored_dirs.insert(header.path_bytes());
         }
 
         Ok(())
