@@ -24,11 +24,11 @@ use clap::Parser;
 use std::{
     ffi::OsString,
     io,
+    ops::Deref,
     path::{Path, PathBuf},
     process::{exit, Child, Command, Stdio},
     str::FromStr,
 };
-use tar::Archive;
 
 // Simple wrapper for binary one-letter units (like 300G).
 fn clap_parse_size(src: &str) -> Result<u64, parse_size::Error> {
@@ -45,6 +45,8 @@ struct Args {
         help = "max data size per output volume",
     )]
     max_size: u64,
+    #[clap(short = 'd', long, help = "recreate dirs in new volumes")]
+    recreate_dirs: bool,
     #[clap(long)]
     compress: Option<String>,
     #[clap(short = 'a', long, default_value = "5")]
@@ -62,6 +64,8 @@ struct Volume {
     temp_output: Option<tempfile::TempPath>,
     target_file: PathBuf,
     subprocess: Option<Child>,
+    prev_dir: Vec<u8>,
+    stored_dirs: patricia_tree::PatriciaSet,
 }
 
 impl Volume {
@@ -128,6 +132,8 @@ impl Volume {
             temp_output: Some(temp_output),
             target_file,
             subprocess: maybe_subprocess,
+            prev_dir: vec![],
+            stored_dirs: Default::default(),
         })
     }
 
@@ -171,6 +177,8 @@ impl Drop for Volume {
 struct SplitState {
     vol_idx: usize,
     args: Args,
+    // It is very likely that a trie would work better here.
+    dirs: patricia_tree::PatriciaMap<tar::Header>,
     // We keep it optional, as we take and set back.
     // I.e. it is optional only *within* certain functions.
     volume: Option<Volume>,
@@ -184,6 +192,7 @@ impl SplitState {
         Ok(Self {
             vol_idx,
             args,
+            dirs: Default::default(),
             volume: Some(volume),
         })
     }
@@ -199,12 +208,47 @@ impl SplitState {
 
         let volume = self.volume.as_mut().unwrap();
         let header = entry.header().clone();
+
+        if self.args.recreate_dirs {
+            let path_bytes = header.path_bytes();
+            let mut path = path_bytes.deref();
+            if let Some(p) = path.strip_suffix(&[b'/']) {
+                path = p;
+            }
+
+            let slash_pos = path.iter().enumerate().rev().find(|(_, &c)| c == b'/');
+            if let Some((pos, _)) = slash_pos {
+                let dirname = &path[..=pos];
+                if dirname != volume.prev_dir {
+                    volume.prev_dir = dirname.to_vec();
+
+                    for header in self.dirs.common_prefix_values(dirname) {
+                        if !volume.stored_dirs.contains(header.path_bytes()) {
+                            volume
+                                .builder
+                                .as_mut()
+                                .unwrap()
+                                .append(header, vec![].as_slice())?;
+                            volume.stored_dirs.insert(header.path_bytes());
+                        }
+                    }
+                }
+            }
+        }
+
         volume
             .builder
             .as_mut()
             .unwrap()
             .append(&header, &mut entry)?;
         volume.acc_size += entry.size();
+
+        if self.args.recreate_dirs && header.entry_type().is_dir() {
+            self.dirs.insert(
+                header.path_bytes().into_owned().into_boxed_slice(),
+                entry.header().clone(),
+            );
+        }
 
         Ok(())
     }
@@ -237,7 +281,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::mem::drop(stdin);
         Box::new(io::BufReader::new(std::fs::File::open(&args.input_file)?))
     };
-    let mut archive = Archive::new(file);
+    let mut archive = tar::Archive::new(file);
 
     let mut state = SplitState::new(args)?;
     for ent in archive.entries()?.raw(true) {
