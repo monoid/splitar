@@ -30,6 +30,8 @@ use std::{
     str::FromStr,
 };
 
+const TAR_HEADER_SIZE: u64 = 1024;
+
 // Simple wrapper for binary one-letter units (like 300G).
 fn clap_parse_size(src: &str) -> Result<u64, parse_size::Error> {
     parse_size::Config::new().with_binary().parse_size(src)
@@ -127,7 +129,7 @@ impl Volume {
         ));
 
         Ok(Self {
-            acc_size: 0,
+            acc_size: 2 * TAR_HEADER_SIZE,  // Account two EOF empty headers
             builder: Some(builder),
             temp_output: Some(temp_output),
             target_file,
@@ -227,8 +229,9 @@ impl SplitState {
         let volume = self.volume.as_mut().unwrap();
         let acc_size = volume.acc_size;
         let max_size = self.args.max_size;
+        let entry_size = TAR_HEADER_SIZE + entry.size();
 
-        if acc_size > 0 && acc_size + entry.size() > max_size {
+        if acc_size > 0 && acc_size + entry_size > max_size {
             self.start_new_volume()?;
         }
 
@@ -268,7 +271,7 @@ impl SplitState {
             .as_mut()
             .unwrap()
             .append(&header, &mut entry)?;
-        volume.acc_size += entry.size();
+        volume.acc_size += entry_size;
 
         if self.args.recreate_dirs && header.entry_type().is_dir() {
             self.dirs
