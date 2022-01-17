@@ -137,6 +137,33 @@ impl Volume {
         })
     }
 
+    /// Insert dirs known so far for particular path, unless they was already
+    /// inserted into particular volume.
+    fn inject_dirs_for_path(
+        &mut self,
+        dirname: &[u8],
+        known_dirs: &patricia_tree::PatriciaMap<tar::Header>,
+    ) -> io::Result<()> {
+        for header in known_dirs.common_prefix_values(dirname) {
+            let path_bytes = header.path_bytes();
+            let path_lossy = String::from_utf8_lossy(&path_bytes);
+            if !self.stored_dirs.contains(header.path_bytes()) {
+                log::debug!(
+                    "Dirname {:?} is new for the volume, inserting...",
+                    path_lossy
+                );
+                self.builder
+                    .as_mut()
+                    .unwrap()
+                    .append(header, vec![].as_slice())?;
+                self.stored_dirs.insert(header.path_bytes());
+            } else {
+                log::debug!("Dirname {:?} already inserted, skipping...", path_lossy);
+            }
+        }
+        Ok(())
+    }
+
     /// Complete writing the volume: finish the builder, wait the subprocess
     /// to finish, and rename the temp file to the target file.
     /// If this method is not called, the Drop implementation will rollback
@@ -211,40 +238,28 @@ impl SplitState {
         if self.args.recreate_dirs {
             let path_bytes = header.path_bytes();
             let mut path = path_bytes.deref();
-            if let Some(p) = path.strip_suffix(&[b'/']) {
-                path = p;
-            }
 
-            let slash_pos = path.iter().enumerate().rev().find(|(_, &c)| c == b'/');
-            if let Some((pos, _)) = slash_pos {
-                // std::path::Path is OS-dependent and cannot be used.  It would be
-                // nice to have something like Python's posixpath.
-                let dirname = &path[..=pos];
-                log::debug!("Checking dirname {:?}", String::from_utf8_lossy(dirname));
-                if dirname != volume.prev_dir {
-                    volume.prev_dir = dirname.to_vec();
-
-                    for header in self.dirs.common_prefix_values(dirname) {
-                        let path_bytes = header.path_bytes();
-                        let path_lossy = String::from_utf8_lossy(&path_bytes);
-                        if !volume.stored_dirs.contains(header.path_bytes()) {
-                            log::debug!(
-                                "Dirname {:?} is new for the volume, inserting...",
-                                path_lossy
-                            );
-                            volume
-                                .builder
-                                .as_mut()
-                                .unwrap()
-                                .append(header, vec![].as_slice())?;
-                            volume.stored_dirs.insert(header.path_bytes());
-                        } else {
-                            log::debug!("Dirname {:?} already inserted, skipping...", path_lossy);
-                        }
-                    }
-                } else {
-                    log::debug!("Dirname is same, skip it.")
+            log::debug!("Checking path {:?}", String::from_utf8_lossy(path));
+            let same_dir = path
+                .strip_prefix(volume.prev_dir.as_slice())
+                .map(|p| !p.is_empty() && !p.contains(&b'/'))
+                .unwrap_or(false);
+            if !same_dir {
+                if let Some(p) = path.strip_suffix(&[b'/']) {
+                    path = p;
                 }
+
+                let slash_pos = path.iter().enumerate().rev().find(|(_, &c)| c == b'/');
+                if let Some((pos, _)) = slash_pos {
+                    // std::path::Path is OS-dependent and cannot be used.  It would be
+                    // nice to have something like Python's posixpath.
+                    let dirname = &path[..=pos];
+
+                    volume.inject_dirs_for_path(dirname, &self.dirs)?;
+                    volume.prev_dir = dirname.to_vec();
+                }
+            } else {
+                log::debug!("Dirname is same, skip it.")
             }
         }
 
