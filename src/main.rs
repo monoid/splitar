@@ -20,6 +20,7 @@
  * IN THE SOFTWARE.
  */
 
+use anyhow::{self as ah, Context as _};
 use clap::Parser;
 use std::{
     ffi::OsString,
@@ -71,14 +72,14 @@ struct Volume {
 }
 
 impl Volume {
-    fn new(vol_idx: usize, args: &Args) -> io::Result<Self> {
+    fn new(vol_idx: usize, args: &Args) -> ah::Result<Self> {
         let target_file = PathBuf::from_str(&format!(
             "{path}{index:0>width$}",
             path = args.output_prefix,
             width = args.suffix_length as _,
             index = vol_idx,
         ))
-        .expect("invalid output path");
+        .context("internal: failed to contstruct output path")?;
         log::info!("Starting new volume: {:?}", target_file);
         log::debug!("Creating temp file for output");
         let out_temp_file = tempfile::Builder::new()
@@ -86,7 +87,8 @@ impl Volume {
             .prefix(target_file.file_name().unwrap())
             .rand_bytes(args.suffix_length as _)
             .suffix(".tmp")
-            .tempfile_in(target_file.parent().unwrap_or_else(|| Path::new(".")))?;
+            .tempfile_in(target_file.parent().unwrap_or_else(|| Path::new(".")))
+            .context("failed to create output tempfile")?;
         let (out_file, temp_output) = out_temp_file.into_parts();
         log::debug!("Output temp file {:?}", temp_output);
 
@@ -97,12 +99,15 @@ impl Volume {
                 let shell = std::env::var_os("SHELL").unwrap_or_else(|| {
                     OsString::from_str("/bin/bash").expect("internal: can't run on this os")
                 });
-                let mut subprocess = Command::new(shell)
+                let mut subprocess = Command::new(shell.clone())
                     .arg("-c")
                     .arg(compress)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::from(out_file))
-                    .spawn()?;
+                    .spawn()
+                    .with_context(|| {
+                        format!("failed to start {:?} with shell {:?}", compress, shell)
+                    })?;
                 log::info!("Executing subprocess {}", subprocess.id());
 
                 let out = Box::new(
@@ -129,7 +134,7 @@ impl Volume {
         ));
 
         Ok(Self {
-            acc_size: 2 * TAR_HEADER_SIZE,  // Account two EOF empty headers
+            acc_size: 2 * TAR_HEADER_SIZE, // Account two EOF empty headers
             builder: Some(builder),
             temp_output: Some(temp_output),
             target_file,
@@ -145,7 +150,7 @@ impl Volume {
         &mut self,
         dirname: &[u8],
         known_dirs: &patricia_tree::PatriciaMap<tar::Header>,
-    ) -> io::Result<()> {
+    ) -> ah::Result<()> {
         for header in known_dirs.common_prefix_values(dirname) {
             let path_bytes = header.path_bytes();
             let path_lossy = String::from_utf8_lossy(&path_bytes);
@@ -157,7 +162,8 @@ impl Volume {
                 self.builder
                     .as_mut()
                     .unwrap()
-                    .append(header, vec![].as_slice())?;
+                    .append(header, vec![].as_slice())
+                    .context("failed to write an entry to output file")?;
                 self.stored_dirs.insert(header.path_bytes());
             } else {
                 log::debug!("Dirname {:?} already inserted, skipping...", path_lossy);
@@ -170,22 +176,33 @@ impl Volume {
     /// to finish, and rename the temp file to the target file.
     /// If this method is not called, the Drop implementation will rollback
     /// everything.
-    fn finish(mut self) -> io::Result<()> {
+    fn finish(mut self) -> ah::Result<()> {
         // Finish the builder, and drop it, closing the
         // underlying file.
-        self.builder.take().unwrap().finish()?;
+        self.builder
+            .take()
+            .unwrap()
+            .finish()
+            .context("failed to write final data to output file")?;
 
         // It is important that we call the Builder::finish first
         if let Some(mut subprocess) = self.subprocess.take() {
             log::info!("Waiting subprocess {} to finish", subprocess.id());
-            subprocess.wait()?;
+            // FIXME check status!
+            subprocess
+                .wait()
+                .context("failed to wait for subprocess completion")?;
         }
 
         log::debug!("Moving {:?} to {:?}", self.temp_output, self.target_file);
-        self.temp_output
-            .take()
-            .unwrap()
-            .persist(&self.target_file)?;
+        let temp_output = self.temp_output.take().unwrap();
+        let temp_path = temp_output.as_os_str().to_os_string();
+        temp_output.persist(&self.target_file).with_context(|| {
+            format!(
+                "failed to rename temp file {:?} to output file {:?}",
+                temp_path, self.target_file
+            )
+        })?;
         set_umasked_mode(&self.target_file, 0o666)
     }
 }
@@ -213,7 +230,7 @@ struct SplitState {
 }
 
 impl SplitState {
-    fn new(args: Args) -> io::Result<Self> {
+    fn new(args: Args) -> ah::Result<Self> {
         let vol_idx = 0;
         let volume = Volume::new(vol_idx, &args)?;
 
@@ -225,7 +242,7 @@ impl SplitState {
         })
     }
 
-    fn next_file<R: io::Read>(&mut self, mut entry: tar::Entry<R>) -> io::Result<()> {
+    fn next_file<R: io::Read>(&mut self, mut entry: tar::Entry<R>) -> ah::Result<()> {
         let volume = self.volume.as_mut().unwrap();
         let acc_size = volume.acc_size;
         let max_size = self.args.max_size;
@@ -270,7 +287,8 @@ impl SplitState {
             .builder
             .as_mut()
             .unwrap()
-            .append(&header, &mut entry)?;
+            .append(&header, &mut entry)
+            .context("failed to append a tar entry to the output")?;
         volume.acc_size += entry_size;
 
         if self.args.recreate_dirs && header.entry_type().is_dir() {
@@ -282,7 +300,7 @@ impl SplitState {
         Ok(())
     }
 
-    fn start_new_volume(&mut self) -> io::Result<()> {
+    fn start_new_volume(&mut self) -> ah::Result<()> {
         self.volume.take().unwrap().finish()?;
         self.vol_idx += 1;
         self.volume = Some(Volume::new(self.vol_idx, &self.args)?);
@@ -290,7 +308,7 @@ impl SplitState {
         Ok(())
     }
 
-    fn finish(mut self) -> io::Result<()> {
+    fn finish(mut self) -> ah::Result<()> {
         self.volume.take().unwrap().finish()
     }
 }
@@ -326,7 +344,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// tempfile crate creates files that only owner can read; we reset
 /// the file permissions to a default mode.
 #[cfg(unix)]
-fn set_umasked_mode(file: &Path, mode: u32) -> io::Result<()> {
+fn set_umasked_mode(file: &Path, mode: u32) -> ah::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
 
     // Is safe as we just set and reset umask.
@@ -342,16 +360,24 @@ fn set_umasked_mode(file: &Path, mode: u32) -> io::Result<()> {
         umask
     };
     let result_mode = mode & (!umask as u32);
-    std::fs::set_permissions(file, std::fs::Permissions::from_mode(result_mode))
+    std::fs::set_permissions(file, std::fs::Permissions::from_mode(result_mode)).with_context(
+        || {
+            format!(
+                "failed to set permission {} to the output file {:?}",
+                result_mode, file
+            )
+        },
+    )?;
+    Ok(())
 }
 
 #[cfg(not(unix))]
-fn set_default_mode(file: &Path) -> io::Result<()> {
+fn set_default_mode(file: &Path) -> ah::Result<()> {
     // I have no better idea.
     Ok(())
 }
 
-fn eprintln_error<E: std::fmt::Display>(e: E) {
+fn eprintln_error<E: std::fmt::Debug>(e: E) {
     use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor as _};
 
     let choice = if atty::is(atty::Stream::Stdout) {
@@ -367,7 +393,7 @@ fn eprintln_error<E: std::fmt::Display>(e: E) {
     stderr.set_color(&bold_red).unwrap();
     eprint!("error:");
     stderr.set_color(&ColorSpec::new()).unwrap();
-    eprintln!(" {}", e);
+    eprintln!(" {:?}", e);
 }
 
 fn main() {
