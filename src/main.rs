@@ -372,8 +372,9 @@ fn set_umasked_mode(file: &Path, mode: u32) -> ah::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn set_default_mode(file: &Path) -> ah::Result<()> {
+fn set_unmasked_mode(file: &Path, mode: u32) -> ah::Result<()> {
     // I have no better idea.
+    log::warn!("tempfile permissions on the output path {:?} haven't been changed on this OS");
     Ok(())
 }
 
