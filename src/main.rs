@@ -188,10 +188,15 @@ impl Volume {
         // It is important that we call the Builder::finish first
         if let Some(mut subprocess) = self.subprocess.take() {
             log::info!("Waiting subprocess {} to finish", subprocess.id());
-            // FIXME check status!
-            subprocess
+            let ret = subprocess
                 .wait()
                 .context("failed to wait for subprocess completion")?;
+
+            ah::ensure!(
+                ret.success(),
+                "subprocess exited with error: {}",
+                ret.code().unwrap_or(-1)
+            );
         }
 
         log::debug!("Moving {:?} to {:?}", self.temp_output, self.target_file);
