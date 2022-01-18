@@ -149,7 +149,7 @@ impl Volume {
     fn inject_dirs_for_path(
         &mut self,
         dirname: &[u8],
-        known_dirs: &patricia_tree::PatriciaMap<tar::Header>,
+        known_dirs: &patricia_tree::PatriciaMap<Box<tar::Header>>,
     ) -> ah::Result<()> {
         for header in known_dirs.common_prefix_values(dirname) {
             let path_bytes = header.path_bytes();
@@ -228,7 +228,7 @@ impl Drop for Volume {
 struct SplitState {
     vol_idx: usize,
     args: Args,
-    dirs: patricia_tree::PatriciaMap<tar::Header>,
+    dirs: patricia_tree::PatriciaMap<Box<tar::Header>>,
     // We keep it optional, as we take and set back.
     // I.e. it is optional only *within* certain functions.
     volume: Option<Volume>,
@@ -298,7 +298,7 @@ impl SplitState {
 
         if self.args.recreate_dirs && header.entry_type().is_dir() {
             self.dirs
-                .insert(header.path_bytes(), entry.header().clone());
+                .insert(header.path_bytes(), Box::new(entry.header().clone()));
             volume.stored_dirs.insert(header.path_bytes());
         }
 
