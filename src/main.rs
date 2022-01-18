@@ -31,7 +31,7 @@ use std::{
     str::FromStr,
 };
 
-const TAR_HEADER_SIZE: u64 = 1024;
+const TAR_HEADER_SIZE: u64 = 512;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
