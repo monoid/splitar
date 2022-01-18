@@ -8,11 +8,11 @@ more than necessary.
 
 ## Features
 + Split tar files, generating valid tar files of limited data size.
-+ Reading data from stdin (writing to stdout is not possible, obviously).
++ Reading data from stdin if file is `-` (writing to stdout is not possible,
+  obviously).
 + Compress filter (or any other kind) for the output.
-+ Recreate directory entries for each volume, making them truly independent.
-
-## TODO
++ Optionally recreate directory entries for each volume, making them
+  truly independent.
 + Optionally fail when file too large is found.
 
 ## Limitations

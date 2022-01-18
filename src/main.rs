@@ -33,8 +33,20 @@ use std::{
 
 const TAR_HEADER_SIZE: u64 = 1024;
 
+#[derive(Debug, thiserror::Error)]
+enum Error {
+    #[error("file {:?} with its header is larger than --max-size", .0)]
+    FileTooLarge(String),
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error(transparent)]
+    Other(#[from] ah::Error),
+}
+
+type Result<T> = std::result::Result<T, Error>;
+
 // Simple wrapper for binary one-letter units (like 300G).
-fn clap_parse_size(src: &str) -> Result<u64, parse_size::Error> {
+fn clap_parse_size(src: &str) -> std::result::Result<u64, parse_size::Error> {
     parse_size::Config::new().with_binary().parse_size(src)
 }
 
@@ -48,6 +60,8 @@ struct Args {
         help = "max data size per output volume",
     )]
     max_size: u64,
+    #[clap(long, help = "fail if a file is too large to fit into single volume")]
+    fail_on_large_file: bool,
     #[clap(short = 'd', long, help = "recreate dirs in new volumes")]
     recreate_dirs: bool,
     #[clap(long)]
@@ -247,11 +261,17 @@ impl SplitState {
         })
     }
 
-    fn next_file<R: io::Read>(&mut self, mut entry: tar::Entry<R>) -> ah::Result<()> {
+    fn next_file<R: io::Read>(&mut self, mut entry: tar::Entry<R>) -> Result<()> {
         let volume = self.volume.as_mut().unwrap();
         let acc_size = volume.acc_size;
         let max_size = self.args.max_size;
         let entry_size = TAR_HEADER_SIZE + entry.size();
+
+        if self.args.fail_on_large_file && entry_size > max_size {
+            return Err(Error::FileTooLarge(
+                String::from_utf8_lossy(&entry.path_bytes()).to_string(),
+            ));
+        }
 
         if acc_size > 0 && acc_size + entry_size > max_size {
             self.start_new_volume()?;
@@ -318,7 +338,7 @@ impl SplitState {
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+fn run() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
 
@@ -404,7 +424,12 @@ fn eprintln_error<E: std::fmt::Debug>(e: E) {
 
 fn main() {
     if let Err(e) = run() {
-        eprintln_error(e);
-        exit(1);
+        let retcode = match &e {
+            Error::FileTooLarge(_) => 3,
+            _ => 1,
+        };
+        // Convert to ah::Erorr for pretty output.
+        eprintln_error(Into::<ah::Error>::into(e));
+        exit(retcode);
     }
 }
