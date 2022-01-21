@@ -22,6 +22,7 @@
 
 use anyhow::{self as ah, Context as _};
 use clap::Parser;
+use interruptable::Interruptable;
 use std::{
     ffi::OsString,
     io,
@@ -29,6 +30,10 @@ use std::{
     path::{Path, PathBuf},
     process::{exit, Child, Command, Stdio},
     str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 const TAR_HEADER_SIZE: u64 = 512;
@@ -38,9 +43,13 @@ enum Error {
     #[error("file {:?} with its header is larger than --max-size", .0)]
     FileTooLarge(String),
     #[error(transparent)]
-    Io(#[from] io::Error),
-    #[error(transparent)]
     Other(#[from] ah::Error),
+}
+
+impl From<io::Error> for Error {
+    fn from(source: io::Error) -> Self {
+        Self::Other(source.into())
+    }
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -73,11 +82,13 @@ struct Args {
     output_prefix: String,
 }
 
+type SplitarRead = Interruptable<io::BufWriter<Box<dyn io::Write>>, Arc<AtomicBool>>;
+
 // This struct has some Option<T> field.  They are always
 // Some(_), except Drop::drop or similar methods.
 struct Volume {
     acc_size: u64,
-    builder: Option<tar::Builder<io::BufWriter<Box<dyn io::Write>>>>,
+    builder: Option<tar::Builder<SplitarRead>>,
     temp_output: Option<tempfile::TempPath>,
     target_file: PathBuf,
     subprocess: Option<Child>,
@@ -86,7 +97,7 @@ struct Volume {
 }
 
 impl Volume {
-    fn new(vol_idx: usize, args: &Args) -> ah::Result<Self> {
+    fn new(vol_idx: usize, args: &Args, interrupt_flag: Arc<AtomicBool>) -> ah::Result<Self> {
         let target_file = PathBuf::from_str(&format!(
             "{path}{index:0>width$}",
             path = args.output_prefix,
@@ -138,13 +149,16 @@ impl Volume {
             None => Box::new(out_file),
         };
 
-        let builder = tar::Builder::new(io::BufWriter::with_capacity(
-            /* 16384 is default pipe buffer size for Linux;
-             * on MacOS, it can grow on demand up to this value.
-             * We are using half of this value.
-             */
-            1 << 13,
-            out_file,
+        let builder = tar::Builder::new(Interruptable::new(
+            io::BufWriter::with_capacity(
+                /* 16384 is default pipe buffer size for Linux;
+                 * on MacOS, it can grow on demand up to this value.
+                 * We are using half of this value.
+                 */
+                1 << 13,
+                out_file,
+            ),
+            interrupt_flag,
         ));
 
         Ok(Self {
@@ -246,18 +260,20 @@ struct SplitState {
     // We keep it optional, as we take and set back.
     // I.e. it is optional only *within* certain functions.
     volume: Option<Volume>,
+    interrupt_flag: Arc<AtomicBool>,
 }
 
 impl SplitState {
-    fn new(args: Args) -> ah::Result<Self> {
+    fn new(args: Args, interrupt_flag: Arc<AtomicBool>) -> ah::Result<Self> {
         let vol_idx = 0;
-        let volume = Volume::new(vol_idx, &args)?;
+        let volume = Volume::new(vol_idx, &args, interrupt_flag.clone())?;
 
         Ok(Self {
             vol_idx,
             args,
             dirs: Default::default(),
             volume: Some(volume),
+            interrupt_flag,
         })
     }
 
@@ -328,7 +344,11 @@ impl SplitState {
     fn start_new_volume(&mut self) -> ah::Result<()> {
         self.volume.take().unwrap().finish()?;
         self.vol_idx += 1;
-        self.volume = Some(Volume::new(self.vol_idx, &self.args)?);
+        self.volume = Some(Volume::new(
+            self.vol_idx,
+            &self.args,
+            self.interrupt_flag.clone(),
+        )?);
 
         Ok(())
     }
@@ -338,12 +358,7 @@ impl SplitState {
     }
 }
 
-fn run() -> Result<()> {
-    env_logger::init();
-    let args = Args::parse();
-
-    log::debug!("Args: {:?}", args);
-
+fn run(args: Args, interrupt_flag: Arc<AtomicBool>) -> Result<()> {
     let stdin = io::stdin();
     let stdin = stdin.lock();
 
@@ -353,9 +368,9 @@ fn run() -> Result<()> {
         std::mem::drop(stdin);
         Box::new(io::BufReader::new(std::fs::File::open(&args.input_file)?))
     };
-    let mut archive = tar::Archive::new(file);
+    let mut archive = tar::Archive::new(Interruptable::new(file, interrupt_flag.clone()));
 
-    let mut state = SplitState::new(args)?;
+    let mut state = SplitState::new(args, interrupt_flag)?;
     for ent in archive.entries()?.raw(false) {
         let ent = ent?;
         log::debug!("entry: {:?}@{}", ent.path()?, ent.size());
@@ -423,7 +438,22 @@ fn eprintln_error<E: std::fmt::Debug>(e: E) {
 }
 
 fn main() {
-    if let Err(e) = run() {
+    let interrupt_flag = Arc::new(AtomicBool::new(false));
+    let interrput_flag2 = interrupt_flag.clone();
+
+    env_logger::init();
+    let args = Args::parse();
+
+    log::debug!("Args: {:?}", args);
+
+    let res = ctrlc::set_handler(move || {
+        interrput_flag2.store(true, Ordering::SeqCst);
+    });
+    if let Err(e) = res {
+        log::error!("failed to set SIGINT handler: {}. Ignoring...", e);
+    }
+
+    if let Err(e) = run(args, interrupt_flag) {
         let retcode = match &e {
             Error::FileTooLarge(_) => 3,
             _ => 1,
