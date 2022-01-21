@@ -71,6 +71,8 @@ struct Args {
     max_size: u64,
     #[clap(long, help = "fail if a file is too large to fit into single volume")]
     fail_on_large_file: bool,
+    #[clap(short = 'v', long, help = "output files info prefixed with volume number")]
+    verbose: bool,
     #[clap(short = 'd', long, help = "recreate dirs in new volumes")]
     recreate_dirs: bool,
     #[clap(long)]
@@ -172,6 +174,16 @@ impl Volume {
         })
     }
 
+    fn write_data<R: io::Read>(&mut self, header: &tar::Header, data: R) -> ah::Result<()> {
+        self.builder
+            .as_mut()
+            .unwrap()
+            .append(header, data)
+            .context("failed to write an entry to output file")?;
+        self.acc_size += header.size()? + TAR_HEADER_SIZE;
+        Ok(())
+    }
+
     /// Insert dirs known so far for particular path, unless they was already
     /// inserted into particular volume.
     fn inject_dirs_for_path(
@@ -187,11 +199,7 @@ impl Volume {
                     "Dirname {:?} is new for the volume, inserting...",
                     path_lossy
                 );
-                self.builder
-                    .as_mut()
-                    .unwrap()
-                    .append(header, vec![].as_slice())
-                    .context("failed to write an entry to output file")?;
+                self.write_data(header, vec![].as_slice())?;
                 self.stored_dirs.insert(header.path_bytes());
             } else {
                 log::debug!("Dirname {:?} already inserted, skipping...", path_lossy);
@@ -324,13 +332,7 @@ impl SplitState {
             }
         }
 
-        volume
-            .builder
-            .as_mut()
-            .unwrap()
-            .append(&header, &mut entry)
-            .context("failed to append a tar entry to the output")?;
-        volume.acc_size += entry_size;
+        volume.write_data(&header, &mut entry)?;
 
         if self.args.recreate_dirs && header.entry_type().is_dir() {
             self.dirs
