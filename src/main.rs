@@ -21,6 +21,7 @@
  */
 
 use anyhow::{self as ah, Context as _};
+use chrono::TimeZone;
 use clap::Parser;
 use interruptable::Interruptable;
 use std::{
@@ -286,8 +287,7 @@ impl Drop for Volume {
 fn print_header(volume_name: &str, header: &tar::Header) -> io::Result<()> {
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
-    let local_datetime =
-        chrono::naive::NaiveDateTime::from_timestamp(header.mtime().unwrap() as _, 0);
+    let local_datetime = chrono::Local {}.timestamp_millis((1000 * header.mtime().unwrap()) as _);
     let size_str = match header.entry_type() {
         tar::EntryType::Block | tar::EntryType::Char => format!(
             "{}:{}",
@@ -305,7 +305,7 @@ fn print_header(volume_name: &str, header: &tar::Header) -> io::Result<()> {
         user = String::from_utf8_lossy(header.username_bytes().unwrap()),
         group = String::from_utf8_lossy(header.groupname_bytes().unwrap()),
         size = size_str,
-        timestamp = local_datetime,
+        timestamp = local_datetime.format("%Y-%m-%d %H:%M:%S"),
         path = String::from_utf8_lossy(&header.path_bytes()),
     )?;
 
