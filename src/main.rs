@@ -25,7 +25,7 @@ use clap::Parser;
 use interruptable::Interruptable;
 use std::{
     ffi::OsString,
-    io,
+    io::{self, Write as _},
     ops::Deref,
     path::{Path, PathBuf},
     process::{exit, Child, Command, Stdio},
@@ -71,7 +71,11 @@ struct Args {
     max_size: u64,
     #[clap(long, help = "fail if a file is too large to fit into single volume")]
     fail_on_large_file: bool,
-    #[clap(short = 'v', long, help = "output files info prefixed with volume number")]
+    #[clap(
+        short = 'v',
+        long,
+        help = "output files info prefixed with volume number"
+    )]
     verbose: bool,
     #[clap(short = 'd', long, help = "recreate dirs in new volumes")]
     recreate_dirs: bool,
@@ -96,15 +100,20 @@ struct Volume {
     subprocess: Option<Child>,
     prev_dir: Vec<u8>,
     stored_dirs: patricia_tree::PatriciaSet,
+    volume_name: String,
 }
 
 impl Volume {
     fn new(vol_idx: usize, args: &Args, interrupt_flag: Arc<AtomicBool>) -> ah::Result<Self> {
-        let target_file = PathBuf::from_str(&format!(
-            "{path}{index:0>width$}",
-            path = args.output_prefix,
+        let volume_name = format!(
+            "{index:0>width$}",
             width = args.suffix_length as _,
             index = vol_idx,
+        );
+        let target_file = PathBuf::from_str(&format!(
+            "{path}{volume}",
+            path = args.output_prefix,
+            volume = volume_name,
         ))
         .context("internal: failed to contstruct output path")?;
         log::info!("Starting new volume: {:?}", target_file);
@@ -171,10 +180,20 @@ impl Volume {
             subprocess: maybe_subprocess,
             prev_dir: vec![],
             stored_dirs: Default::default(),
+            volume_name,
         })
     }
 
-    fn write_data<R: io::Read>(&mut self, header: &tar::Header, data: R) -> ah::Result<()> {
+    fn write_data<R: io::Read>(
+        &mut self,
+        header: &tar::Header,
+        data: R,
+        verbose: bool,
+    ) -> ah::Result<()> {
+        if verbose {
+            print_header(&self.volume_name, header)
+                .context("failed to output verbose file info")?;
+        }
         self.builder
             .as_mut()
             .unwrap()
@@ -190,19 +209,22 @@ impl Volume {
         &mut self,
         dirname: &[u8],
         known_dirs: &patricia_tree::PatriciaMap<Box<tar::Header>>,
+        verbose: bool,
     ) -> ah::Result<()> {
         for header in known_dirs.common_prefix_values(dirname) {
             let path_bytes = header.path_bytes();
-            let path_lossy = String::from_utf8_lossy(&path_bytes);
             if !self.stored_dirs.contains(header.path_bytes()) {
                 log::debug!(
                     "Dirname {:?} is new for the volume, inserting...",
-                    path_lossy
+                    String::from_utf8_lossy(&path_bytes),
                 );
-                self.write_data(header, vec![].as_slice())?;
+                self.write_data(header, vec![].as_slice(), verbose)?;
                 self.stored_dirs.insert(header.path_bytes());
             } else {
-                log::debug!("Dirname {:?} already inserted, skipping...", path_lossy);
+                log::debug!(
+                    "Dirname {:?} already inserted, skipping...",
+                    String::from_utf8_lossy(&path_bytes),
+                );
             }
         }
         Ok(())
@@ -258,6 +280,101 @@ impl Drop for Volume {
             log::warn!("Shouldn't happen: killing subprocess {}", subprocess.id());
             let _ = subprocess.kill();
         }
+    }
+}
+
+fn print_header(volume_name: &str, header: &tar::Header) -> io::Result<()> {
+    let stderr = io::stderr();
+    let mut stderr = stderr.lock();
+    let local_datetime =
+        chrono::naive::NaiveDateTime::from_timestamp(header.mtime().unwrap() as _, 0);
+    let size_str = match header.entry_type() {
+        tar::EntryType::Block | tar::EntryType::Char => format!(
+            "{}:{}",
+            header.device_major().unwrap().unwrap_or(0),
+            header.device_minor().unwrap().unwrap_or(0),
+        ),
+        _ => format!("{}", header.size().unwrap()),
+    };
+    write!(
+        stderr,
+        "{marker} {type}{mod} {user} {group} {size:>12} {timestamp} {path}",
+        marker = volume_name,
+        type = entry_type_char(header),
+        mod = decode_mod(header.mode().unwrap()),
+        user = String::from_utf8_lossy(header.username_bytes().unwrap()),
+        group = String::from_utf8_lossy(header.groupname_bytes().unwrap()),
+        size = size_str,
+        timestamp = local_datetime,
+        path = String::from_utf8_lossy(&header.path_bytes()),
+    )?;
+
+    let link = header.link_name_bytes();
+    // We presume that link exist only for reason.
+    let link = link.as_ref().map(|c| String::from_utf8_lossy(c));
+    match header.entry_type() {
+        tar::EntryType::Link => {
+            write!(
+                stderr,
+                " link to {}",
+                // We might just call unwrap and fail.
+                link.unwrap_or_default(),
+            )?;
+        }
+        tar::EntryType::Symlink => {
+            write!(
+                stderr,
+                " -> {}",
+                // We might just call unwrap and fail.
+                link.unwrap_or_default(),
+            )?;
+        }
+        _ => {}
+    }
+    writeln!(stderr)?;
+    Ok(())
+}
+
+fn format_flag_group(group: u32) -> &'static str {
+    match group {
+        0 => "---",
+        1 => "--x",
+        2 => "-w-",
+        3 => "-wx",
+        4 => "r--",
+        5 => "r-x",
+        6 => "rw-",
+        7 => "rwx",
+        _ => unreachable!(),
+    }
+}
+
+fn decode_mod(mode: u32) -> String {
+    let mut res = String::with_capacity(9);
+    // TODO sticky bits...
+    for offset in [6u32, 3, 0].iter() {
+        res.push_str(format_flag_group((mode >> offset) & 0x7));
+    }
+    res
+}
+
+fn entry_type_char(header: &tar::Header) -> char {
+    match header.entry_type() {
+        tar::EntryType::Regular | tar::EntryType::Continuous | tar::EntryType::GNUSparse => {
+            if header.path_bytes().ends_with(&[b'/']) {
+                'd'
+            } else {
+                '-'
+            }
+        }
+        tar::EntryType::Link => 'h',
+        tar::EntryType::Symlink => 'l',
+        tar::EntryType::Char => 'c',
+        tar::EntryType::Block => 'b',
+        tar::EntryType::Directory => 'd',
+        tar::EntryType::Fifo => 'p',
+        tar::EntryType::GNULongName | tar::EntryType::GNULongLink => 'L',
+        _ => '?',
     }
 }
 
@@ -324,7 +441,7 @@ impl SplitState {
                     // nice to have something like Python's posixpath.
                     let dirname = &path[..=pos];
 
-                    volume.inject_dirs_for_path(dirname, &self.dirs)?;
+                    volume.inject_dirs_for_path(dirname, &self.dirs, self.args.verbose)?;
                     volume.prev_dir = dirname.to_vec();
                 }
             } else {
@@ -332,7 +449,7 @@ impl SplitState {
             }
         }
 
-        volume.write_data(&header, &mut entry)?;
+        volume.write_data(&header, &mut entry, self.args.verbose)?;
 
         if self.args.recreate_dirs && header.entry_type().is_dir() {
             self.dirs
