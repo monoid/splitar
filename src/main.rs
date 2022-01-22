@@ -406,7 +406,7 @@ impl SplitState {
         let volume = self.volume.as_mut().unwrap();
         let acc_size = volume.acc_size;
         let max_size = self.args.max_size;
-        let entry_size = TAR_HEADER_SIZE + entry.size();
+        let entry_size = TAR_HEADER_SIZE + entry.header().entry_size().unwrap();
 
         if self.args.fail_on_large_file && entry_size > max_size {
             return Err(Error::FileTooLarge(
