@@ -8,11 +8,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v1
+
+    - name: Set up Python 3.x
+      uses: actions/setup-python@v2
+      with:
+         python-version: 3.x
     - name: Run fmt
       run: cargo fmt -- --check
     - name: Run clippy
       run: cargo clippy
     - name: Build
       run: cargo build --verbose
-    - name: Run tests
+    - name: Run Rust tests
       run: cargo test --verbose
+    - name: Install pytest
+      run: python -m pip install --upgrade pytest
+    - name: Run Python tests
+      run: python -m pytest -v tests
