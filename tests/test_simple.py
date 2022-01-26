@@ -31,6 +31,17 @@ def test_empty(cargo_run, tmpdir):
     assert outdir.join('output.tar.00000').read_binary() == (b'\x00' * 1024)
 
 
+def test_suffix(cargo_run, tmpdir):
+    outdir = tmpdir.mkdir('out')
+    output = outdir.join('output.tar.')
+    inp = tmpdir.join('input.tar')
+    inp.write(b'\x00' * 1024)
+
+    cargo_run(['-S', '100K', '--suffix-length', '8', str(inp), str(output)])
+
+    assert os.listdir(str(outdir)) == ['output.tar.00000000']
+
+
 @pytest.mark.parametrize("tartype,linkname,contents", [
     (tarfile.DIRTYPE, None, None),
     (tarfile.REGTYPE, None, 1),
