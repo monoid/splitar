@@ -6,6 +6,9 @@ authors = ["(C) 2022 Ivan Boldyrev"]
 description = "A tool for content-aware splitting of tar files"
 readme = "README.md"
 license = "MIT"
+repository = "https://github.com/monoid/splitar/"
+keywords = ["tar", "archive", "archiving", "util"]
+categories = ["command-line-utilities"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
