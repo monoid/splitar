@@ -25,13 +25,9 @@ more than necessary.
   `tar` will refuse creating this link if the target does not exists (e.g.
   it was not unpacked from one of previous volumes).
 
-<!-- TODO: update only after publishing.
-
 # Installation
 
 `splitar` is written in Rust, and having the
 [https://doc.rust-lang.org/cargo/getting-started/installation.html](`cargo` installed),
 you can install it with `cargo install splitar` command.  No manual
-installation of any dependency is required. 
-
--->
+installation of any additional dependency is required.
