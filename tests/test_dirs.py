@@ -100,7 +100,7 @@ def test_next_volume_create(cargo_run, tmpdir):
         for obj in DIRS.get_children(""):
             obj.add_to_tar(tar)
     cargo_run(["-S", "35K", "--recreate-dirs", str(inp), str(output)])
-    assert os.listdir(str(outdir)) == ["output.tar.00000", "output.tar.00001"]
+    assert sorted(os.listdir(str(outdir))) == ["output.tar.00000", "output.tar.00001"]
     with tarfile.open(str(outdir.join("output.tar.00000")), "r") as tar:
         assert tar.getnames() == [
             "thedir",
@@ -131,7 +131,7 @@ def test_no_create(cargo_run, tmpdir):
         for obj in DIRS.get_children(""):
             obj.add_to_tar(tar)
     cargo_run(["-S", "39K", str(inp), str(output)])
-    assert os.listdir(str(outdir)) == ["output.tar.00000", "output.tar.00001"]
+    assert sorted(os.listdir(str(outdir))) == ["output.tar.00000", "output.tar.00001"]
     with tarfile.open(str(outdir.join("output.tar.00000")), "r") as tar:
         assert tar.getnames() == [
             "thedir",
