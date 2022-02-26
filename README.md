@@ -28,6 +28,6 @@ more than necessary.
 # Installation
 
 `splitar` is written in Rust, and having the
-[https://doc.rust-lang.org/cargo/getting-started/installation.html](`cargo` installed),
+[`cargo` installed](https://doc.rust-lang.org/cargo/getting-started/installation.html),
 you can install it with `cargo install splitar` command.  No manual
 installation of any additional dependency is required.
