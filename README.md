@@ -31,3 +31,6 @@ more than necessary.
 [`cargo` installed](https://doc.rust-lang.org/cargo/getting-started/installation.html),
 you can install it with `cargo install splitar` command.  No manual
 installation of any additional dependency is required.
+
+# Links 
++ GitHub: https://github.com/monoid/splitar.
