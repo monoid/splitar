@@ -32,7 +32,7 @@ use std::{
     process::{exit, Child, Command, Stdio},
     str::FromStr,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::AtomicBool,
         Arc,
     },
 };
@@ -558,18 +558,21 @@ fn eprintln_error<E: std::fmt::Debug>(e: E) {
 
 fn main() {
     let interrupt_flag = Arc::new(AtomicBool::new(false));
-    let interrput_flag2 = interrupt_flag.clone();
 
     env_logger::init();
     let args = Args::parse();
 
     log::debug!("Args: {:?}", args);
 
-    let res = ctrlc::set_handler(move || {
-        interrput_flag2.store(true, Ordering::SeqCst);
-    });
-    if let Err(e) = res {
-        log::error!("failed to set SIGINT handler: {}. Ignoring...", e);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let interrput_flag2 = interrupt_flag.clone();
+        let res = ctrlc::set_handler(move || {
+            interrput_flag2.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        if let Err(e) = res {
+            log::error!("failed to set SIGINT handler: {}. Ignoring...", e);
+        }
     }
 
     if let Err(e) = run(args, interrupt_flag) {

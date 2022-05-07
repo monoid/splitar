@@ -32,5 +32,9 @@ more than necessary.
 you can install it with `cargo install splitar` command.  No manual
 installation of any additional dependency is required.
 
+# WASM target
+
+You can compile `splitar` for the `wasm32-wasi` target.
+
 # Links 
 + GitHub: https://github.com/monoid/splitar.
