@@ -31,10 +31,7 @@ use std::{
     path::{Path, PathBuf},
     process::{exit, Child, Command, Stdio},
     str::FromStr,
-    sync::{
-        atomic::AtomicBool,
-        Arc,
-    },
+    sync::{atomic::AtomicBool, Arc},
 };
 
 const TAR_HEADER_SIZE: u64 = 512;
@@ -533,7 +530,10 @@ fn set_umasked_mode(file: &Path, mode: u32) -> ah::Result<()> {
 #[cfg(not(unix))]
 fn set_umasked_mode(file: &Path, _mode: u32) -> ah::Result<()> {
     // I have no better idea.
-    log::warn!("tempfile permissions on the output path {:?} haven't been changed on this OS", file);
+    log::warn!(
+        "tempfile permissions on the output path {:?} haven't been changed on this OS",
+        file
+    );
     Ok(())
 }
 
