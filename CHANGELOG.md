@@ -1,5 +1,8 @@
 # `splitar` ChangeLog
 
+0.1.2 (2023-03-04)
+: Update vulnerable dependencies.  Thanks to GitHub notifications.
+
 0.1.2 (2022-06-07)
 : Update vulnerable dependencies.  Thanks to GitHub notifications.
 

@@ -284,7 +284,9 @@ impl Drop for Volume {
 fn print_header(volume_name: &str, header: &tar::Header) -> io::Result<()> {
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
-    let local_datetime = chrono::Local {}.timestamp_millis((1000 * header.mtime().unwrap()) as _);
+    let local_datetime = chrono::Local {}
+        .timestamp_millis_opt((1000 * header.mtime().unwrap()) as _)
+        .unwrap();
     let size_str = match header.entry_type() {
         tar::EntryType::Block | tar::EntryType::Char => format!(
             "{}:{}",
