@@ -60,29 +60,36 @@ fn clap_parse_size(src: &str) -> std::result::Result<u64, parse_size::Error> {
 #[derive(Parser, Debug)]
 #[clap(about, version, author)]
 struct Args {
-    #[clap(
+    #[arg(
         short = 'S',
         long,
-        parse(try_from_str = clap_parse_size),
+        value_parser(clap_parse_size),
         help = "max data size per output volume",
     )]
     max_size: u64,
-    #[clap(long, help = "fail if a file is too large to fit into single volume")]
+
+    #[arg(long, help = "fail if a file is too large to fit into single volume")]
     fail_on_large_file: bool,
-    #[clap(
+
+    #[arg(
         short = 'v',
         long,
         help = "output files info prefixed with volume number"
     )]
     verbose: bool,
-    #[clap(short = 'd', long, help = "recreate dirs in new volumes")]
+
+    #[arg(short = 'd', long, help = "recreate dirs in new volumes")]
     recreate_dirs: bool,
-    #[clap(long)]
+
+    #[arg(long)]
     compress: Option<String>,
-    #[clap(short = 'a', long, default_value = "5")]
+
+    #[arg(short = 'a', long, default_value = "5")]
     suffix_length: u8,
-    #[clap(help = "input file path or `-` for stdin")]
+
+    #[arg(help = "input file path or `-` for stdin", value_hint = clap::ValueHint::FilePath)]
     input_file: PathBuf,
+
     output_prefix: String,
 }
 
