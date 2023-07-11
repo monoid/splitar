@@ -64,7 +64,7 @@ struct Args {
         short = 'S',
         long,
         value_parser(clap_parse_size),
-        help = "max data size per output volume",
+        help = "max data size per output volume"
     )]
     max_size: u64,
 
