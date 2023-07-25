@@ -547,9 +547,10 @@ fn set_umasked_mode(file: &Path, _mode: u32) -> ah::Result<()> {
 }
 
 fn eprintln_error<E: std::fmt::Debug>(e: E) {
+    use is_terminal::IsTerminal;
     use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor as _};
 
-    let choice = if atty::is(atty::Stream::Stdout) {
+    let choice = if std::io::stderr().is_terminal() {
         ColorChoice::Auto
     } else {
         ColorChoice::Never
