@@ -2,6 +2,8 @@
 
 Current:
 : Use `is-terminal` instead of unsupported `atty`.
+: Upgrade `tar` crate to 0.4.45, and some other deps too.
+: Upgrade `chrono` crate to 0.4.44, it doesn't depend on `time` anymore.
 
 0.1.2 (2023-03-04)
 : Update vulnerable dependencies.  Thanks to GitHub notifications.
