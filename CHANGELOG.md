@@ -1,6 +1,6 @@
 # `splitar` ChangeLog
 
-Current:
+0.1.4 (2026-03-28):
 : Use `is-terminal` instead of unsupported `atty`.
 : Upgrade `tar` crate to 0.4.45, and some other deps too.
 : Upgrade `chrono` crate to 0.4.44, it doesn't depend on `time` anymore.

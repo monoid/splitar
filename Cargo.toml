@@ -1,8 +1,8 @@
 [package]
 name = "splitar"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
-authors = ["(C) 2023 Ivan Boldyrev"]
+authors = ["Ivan Boldyrev"]
 description = "A tool for content-aware splitting of tar files"
 readme = "README.md"
 license = "MIT"
