@@ -2,6 +2,7 @@
 
 Current:
 : Use `is-terminal` instead of unsupported `atty`.
+: Upgrade tar to 0.4.45, and some other deps too.
 
 0.1.2 (2023-03-04)
 : Update vulnerable dependencies.  Thanks to GitHub notifications.
