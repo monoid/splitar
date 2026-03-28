@@ -81,7 +81,7 @@ struct Args {
     #[arg(short = 'd', long, help = "recreate dirs in new volumes")]
     recreate_dirs: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "compression/decompression filter program")]
     compress: Option<String>,
 
     #[arg(short = 'a', long, default_value = "5")]
