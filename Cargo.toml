@@ -23,7 +23,7 @@ libc = "0.2.183"
 log = "0.4.29"
 parse-size = { version = "1.1.0", features = ["std"] }
 patricia_tree = "0.10.1"
-tar = "0.4.45"
+tar = "0.4.46"
 tempfile = "3.27.0"
 termcolor = "1.4.1"
 thiserror = "2.0.18"
