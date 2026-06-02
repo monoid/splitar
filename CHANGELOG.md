@@ -1,5 +1,8 @@
 # `splitar` ChangeLog
 
+0.1.5 (2026-06-02):
++ Bump tar to 0.4.46.
+
 0.1.4 (2026-03-28):
 + Use `is-terminal` instead of unsupported `atty`.
 + Upgrade `tar` crate to 0.4.45, and some other deps too.
