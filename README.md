@@ -32,9 +32,19 @@ more than necessary.
 you can install it with `cargo install splitar` command.  No manual
 installation of any additional dependency is required.
 
+# Testing
+`splitar`'s tests check it against Python's tar implementation.  The recommended way to run
+tests is
+```
+uv run pytest
+```
+
 # WASM target
 
-You can compile `splitar` for the `wasm32-wasi` target.
+You can compile `splitar` for the `wasm32-wasi` target:
+```
+cargo build --release --target wasm32-wasip2
+```
 
 # Links 
 + GitHub: https://github.com/monoid/splitar.
